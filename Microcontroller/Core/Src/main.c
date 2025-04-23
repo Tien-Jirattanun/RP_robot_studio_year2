@@ -58,6 +58,13 @@ int32_t prismatic_raw_encoder_val = 0;
 int32_t prismatic_raw_encoder_prev = 0;
 int32_t prismatic_encoder_val = 0;
 
+// PID
+arm_pid_instance_f32 PID = {0};
+int32_t prismatic_setposition = 0;
+double prismatic_Kp = 0.1;
+double prismatic_Ki = 0;
+double prismatic_Kd = 0;
+
 int state_debug = 0;
 /* USER CODE END PV */
 
@@ -128,7 +135,14 @@ int main(void)
   // Setup Timer 2 for sensor reading
   HAL_TIM_Base_Start_IT(&htim3);
 
+  //PID
+  PID.Kp = prismatic_Kp;
+  PID.Ki = prismatic_Ki;
+  PID.Kd = prismatic_Kd;
+  arm_pid_init_f32(&PID, 0);
+
   SetHomePrismatic();
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -138,6 +152,7 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+	  PrismaticPIDControl(prismatic_setposition);
   }
   /* USER CODE END 3 */
 }
@@ -602,6 +617,9 @@ void SetHomePrismatic()
 
 void PrismaticMotorControl(int speed, int dir)
 {
+	// Saturation
+	speed = (speed > 100) ? 100 : speed;
+
 	if (dir == 0)
 	{
 		// Set motor2 direction to ___
@@ -615,9 +633,12 @@ void PrismaticMotorControl(int speed, int dir)
 	__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_3, map(speed,0,100,0,19999));
 }
 
-void PrismaticPIDControl(int set_point)
+void PrismaticPIDControl(double set_point)
 {
-	// TODO: code
+	double position = (prismatic_encoder_val * 16)/2048;
+	int speed = arm_pid_f32(&PID, set_point  - position);
+	int dir = (speed > 0) ? 1:0;
+	PrismaticMotorControl(abs(speed), dir);
 }
 
 int map(int x, int in_min, int in_max, int out_min, int out_max)
