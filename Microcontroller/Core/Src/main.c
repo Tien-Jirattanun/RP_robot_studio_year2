@@ -1,20 +1,20 @@
 /* USER CODE BEGIN Header */
 /**
-  ******************************************************************************
-  * @file           : main.c
-  * @brief          : Main program body
-  ******************************************************************************
-  * @attention
-  *
-  * Copyright (c) 2025 STMicroelectronics.
-  * All rights reserved.
-  *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
-  *
-  ******************************************************************************
-  */
+ ******************************************************************************
+ * @file           : main.c
+ * @brief          : Main program body
+ ******************************************************************************
+ * @attention
+ *
+ * Copyright (c) 2025 STMicroelectronics.
+ * All rights reserved.
+ *
+ * This software is licensed under terms that can be found in the LICENSE file
+ * in the root directory of this software component.
+ * If no LICENSE file comes with this software, it is provided AS-IS.
+ *
+ ******************************************************************************
+ */
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
@@ -58,14 +58,15 @@ int32_t prismatic_raw_encoder_val = 0;
 int32_t prismatic_raw_encoder_prev = 0;
 int32_t prismatic_encoder_val = 0;
 
+int32_t state = 0;
+
 // PID
-arm_pid_instance_f32 PID = {0};
+arm_pid_instance_f32 PID = { 0 };
 int32_t prismatic_setposition = 0;
 double prismatic_Kp = 0.1;
 double prismatic_Ki = 0;
 double prismatic_Kd = 0;
 
-int state_debug = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -79,6 +80,19 @@ static void MX_ADC1_Init(void);
 static void MX_TIM2_Init(void);
 /* USER CODE BEGIN PFP */
 
+void SetHomePrismatic();
+
+void PrismaticMotorControl(int speed, int dir);
+
+void PrismaticPIDControl(double set_point);
+
+int map(int x, int in_min, int in_max, int out_min, int out_max);
+
+// External Interrupt
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin);
+
+// Timer loop (Read sensor data and calculate here)
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -123,37 +137,37 @@ int main(void)
   MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
 
-  // Setup PWM Generator
-  HAL_TIM_Base_Start(&htim1);
-  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
-  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
-  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_3);
+	// Setup PWM Generator
+	HAL_TIM_Base_Start(&htim1);
+	HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
+	HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
+	HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_3);
 
-  // Setup Encoder
-  HAL_TIM_Encoder_Start(&htim3,TIM_CHANNEL_ALL);
+	// Setup Encoder
+	HAL_TIM_Encoder_Start(&htim4, TIM_CHANNEL_ALL);
+	prismatic_raw_encoder_val = __HAL_TIM_GET_COUNTER(&htim4);
 
-  // Setup Timer 2 for sensor reading
-  HAL_TIM_Base_Start_IT(&htim3);
+	// Setup Timer 2 for sensor reading
+	HAL_TIM_Base_Start_IT(&htim2);
 
-  //PID
-  PID.Kp = prismatic_Kp;
-  PID.Ki = prismatic_Ki;
-  PID.Kd = prismatic_Kd;
-  arm_pid_init_f32(&PID, 0);
+	//PID
+	PID.Kp = prismatic_Kp;
+	PID.Ki = prismatic_Ki;
+	PID.Kd = prismatic_Kd;
+	arm_pid_init_f32(&PID, 0);
 
-  SetHomePrismatic();
+//	SetHomePrismatic();
 
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  while (1)
-  {
+	while (1) {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	  PrismaticPIDControl(prismatic_setposition);
-  }
+//		PrismaticPIDControl(prismatic_setposition);
+	}
   /* USER CODE END 3 */
 }
 
@@ -389,9 +403,9 @@ static void MX_TIM2_Init(void)
 
   /* USER CODE END TIM2_Init 1 */
   htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 17000;
+  htim2.Init.Prescaler = 1699;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 24999;
+  htim2.Init.Period = 999;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
@@ -485,7 +499,7 @@ static void MX_TIM4_Init(void)
   htim4.Instance = TIM4;
   htim4.Init.Prescaler = 0;
   htim4.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim4.Init.Period = 65535;
+  htim4.Init.Period = 2048;
   htim4.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim4.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   sConfig.EncoderMode = TIM_ENCODERMODE_TI12;
@@ -574,8 +588,14 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(LD2_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : Prismatic_right_limit_Pin Prismatic_left_limit_Pin step_one_plotter_Pin step_two_plotter_Pin */
-  GPIO_InitStruct.Pin = Prismatic_right_limit_Pin|Prismatic_left_limit_Pin|step_one_plotter_Pin|step_two_plotter_Pin;
+  /*Configure GPIO pins : Prismatic_right_limit_Pin Prismatic_left_limit_Pin */
+  GPIO_InitStruct.Pin = Prismatic_right_limit_Pin|Prismatic_left_limit_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : step_one_plotter_Pin step_two_plotter_Pin */
+  GPIO_InitStruct.Pin = step_one_plotter_Pin|step_two_plotter_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
@@ -598,89 +618,73 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 
 // Set Prismatic to home
-void SetHomePrismatic()
-{
-	while (prismatic_left_sw == false)
-	{
+void SetHomePrismatic() {
+	while (prismatic_left_sw == false) {
 		PrismaticMotorControl(10, 0);
 	}
 	PrismaticMotorControl(0, 0);
 
-	//reset encoder val
-	HAL_TIM_Encoder_Stop(&htim3, TIM_CHANNEL_ALL);
-	__HAL_TIM_SET_COUNTER(&htim3, 0);
-	prismatic_raw_encoder_val = 0;
-	prismatic_raw_encoder_prev = 0;
-	prismatic_encoder_val = 0;
-	HAL_TIM_Encoder_Start(&htim3, TIM_CHANNEL_ALL);
+//	//reset encoder val
+//	HAL_TIM_Encoder_Stop(&htim4, TIM_CHANNEL_ALL);
+//	__HAL_TIM_SET_COUNTER(&htim4, 0);
+//	prismatic_raw_encoder_val = 0;
+//	prismatic_raw_encoder_prev = 0;
+//	prismatic_encoder_val = 0;
+//	HAL_TIM_Encoder_Start(&htim4, TIM_CHANNEL_ALL);
 }
 
-void PrismaticMotorControl(int speed, int dir)
-{
+void PrismaticMotorControl(int speed, int dir) {
 	// Saturation
 	speed = (speed > 100) ? 100 : speed;
 
-	if (dir == 0)
-	{
+	if (dir == 0) {
 		// Set motor2 direction to ___
 		HAL_GPIO_WritePin(GPIOC, GPIO_PIN_7, GPIO_PIN_RESET);
-	}
-	else
-	{
+	} else {
 		HAL_GPIO_WritePin(GPIOC, GPIO_PIN_7, GPIO_PIN_SET);
 	}
 
-	__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_3, map(speed,0,100,0,19999));
+	__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_3, map(speed, 0, 100, 0, 19999));
 }
 
-void PrismaticPIDControl(double set_point)
-{
-	double position = (prismatic_encoder_val * 16)/2048;
-	int speed = arm_pid_f32(&PID, set_point  - position);
-	int dir = (speed > 0) ? 1:0;
+void PrismaticPIDControl(double set_point) {
+	double position = (prismatic_encoder_val * 16) / 2048;
+	int speed = arm_pid_f32(&PID, set_point - position);
+	int dir = (speed > 0) ? 1 : 0;
 	PrismaticMotorControl(abs(speed), dir);
 }
 
-int map(int x, int in_min, int in_max, int out_min, int out_max)
-{
-      return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+int map(int x, int in_min, int in_max, int out_min, int out_max) {
+	return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
 
-
 // External Interrupt
-void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
-{
-	if(GPIO_Pin == GPIO_PIN_12)
-	{
-		prismatic_left_sw = 1;
-	}
-	else if (GPIO_Pin == GPIO_PIN_11)
-	{
-		prismatic_right_sw = 1;
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
+	if (GPIO_Pin == GPIO_PIN_12) {
+		prismatic_left_sw = (prismatic_left_sw == 0) ? 1 : 0;
+	} else if (GPIO_Pin == GPIO_PIN_11) {
+		prismatic_right_sw = (prismatic_right_sw == 0) ? 1 : 0;
 	}
 }
 
 // Timer loop (Read sensor data and calculate here)
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
-{
-	if(htim == &htim2)
-	{
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
+	if (htim == &htim2) {
+
+		HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);
 		//-------------------------Read QEI Prismatic-------------------------
-		prismatic_raw_encoder_val = __HAL_TIM_GET_COUNTER(&htim3);
-		int16_t delta = prismatic_raw_encoder_val  - prismatic_raw_encoder_prev;
+		prismatic_raw_encoder_val = __HAL_TIM_GET_COUNTER(&htim4);
+		int16_t delta = prismatic_raw_encoder_val - prismatic_raw_encoder_prev;
 
-		if(delta > 2048/2)
-		{
+		if (delta > 2048 / 2) {
 			delta -= 2048;
-		}
-		else if(delta < -2048/2)
-		{
-	        delta += 2048;
+		} else if (delta < -2048 / 2) {
+			delta += 2048;
 		}
 
-	    prismatic_encoder_val += delta;
-	    prismatic_raw_encoder_prev = prismatic_raw_encoder_val;
-	    //------------------------------------------------------------------------
+		prismatic_encoder_val += delta;
+		prismatic_raw_encoder_prev = prismatic_raw_encoder_val;
+		//------------------------------------------------------------------------
 	}
 }
 
@@ -693,11 +697,10 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
-  /* User can add his own implementation to report the HAL error return state */
-  __disable_irq();
-  while (1)
-  {
-  }
+	/* User can add his own implementation to report the HAL error return state */
+	__disable_irq();
+	while (1) {
+	}
   /* USER CODE END Error_Handler_Debug */
 }
 
