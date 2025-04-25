@@ -55,8 +55,10 @@ TIM_HandleTypeDef htim5;
 //Prismatic
 int8_t prismatic_left_sw = 0;
 int8_t prismatic_right_sw = 0;
+int8_t pen_limit_one = 0;
+int8_t pen_limit_two = 0;
 
-// Encoder var
+// Encoder prismatic
 int32_t prismatic_raw_encoder_val = 0;
 int32_t prismatic_raw_encoder_prev = 0;
 int32_t prismatic_encoder_val = 0;
@@ -66,7 +68,7 @@ double prismatic_feedback = 0.00;
 
 int32_t state = 0;
 
-// PID
+// PID pristmatic
 arm_pid_instance_f32 PID = { 0 };
 double prismatic_setposition = 0.00;
 double prismatic_Kp = 5;
@@ -109,6 +111,12 @@ enum
 {
 	NEW,OLD
 };
+
+// ADC
+uint16_t ADC_RawRead[10]={0};
+double Joy_X_Axis;
+double Joy_Y_Axis;
+double Joy_Buttom;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -126,8 +134,8 @@ static void MX_TIM5_Init(void);
 void SetHomePrismatic();
 void PrismaticMotorControl(int speed, int dir);
 void PrismaticPIDControl(double set_point);
-int map(int x, int in_min, int in_max, int out_min, int out_max);
 
+int map(int x, int in_min, int in_max, int out_min, int out_max);
 
 //Revolute Control
 void SetHomeRevolute();
@@ -135,6 +143,7 @@ void RevoluteMotorControl(int speed, int dir);
 void PrismaticCascadeControl(double pos_setpoint);
 uint64_t micros();
 void Revolute_PosVel_Update();
+void Joy_Strick();
 // External Interrupt
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin);
 
@@ -216,6 +225,9 @@ int main(void)
 	arm_pid_init_f32(&PID, 0);
 	arm_pid_init_f32(&PID_position, 0);
 	arm_pid_init_f32(&PID_velocity, 0);
+
+	// DMA
+	HAL_ADC_Start_DMA(&hadc1, ADC_RawRead, 10);
 
 	SetHomePrismatic();
 	SetHomeRevolute();
@@ -836,6 +848,26 @@ void Revolute_PosVel_Update()
 	QEIdata.Position[OLD] = QEIdata.Position[NEW];
 	QEIdata.TimeStamp[OLD]=QEIdata.TimeStamp[NEW];
 }
+//
+void Joy_Strick(){
+	remain = __HAL_DMA_GET_COUNTER(hadc1.DMA_Handle);
+	float ch1;
+	float ch2;
+	if(remain == 0){
+		int ar_ch1[5] = {0, 2, 4, 6, 8};
+		int ar_ch2[5] = {1, 3, 5, 7, 9};
+		for(int i = 0; i < 5; i++){
+			  ch1 += ADC_RawRead[ar_ch1[i]];
+		}
+		for(int j = 0; j < 5; j++){
+			  ch2 += ADC_RawRead[ar_ch2[j]];
+		}
+		Joy_X_Axis = ch1 / 5;
+		Joy_Y_Axis = ch2 / 5;
+		Joy_Buttom = HAL_GPIO_ReadPin(JOY_BUTTON_GPIO_Port, JOY_BUTTON_Pin);
+	}
+}
+
 // Timer loop (Read sensor data and calculate here)
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 	if (htim == &htim2) {
@@ -856,8 +888,10 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 		//------------------------------------------------------------------------
 
 		//-------------------------Read QEI Revolute------------------------------
-		void QEIEncoderPosVel_Update();
+		void Revolute_PosVel_Update();
 		//------------------------------------------------------------------------
+
+		void Joy_Strick();
 
 	    PrismaticPIDControl(prismatic_setposition);
 	    PrismaticCascadeControl(revolute_setposition);
