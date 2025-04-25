@@ -23,6 +23,7 @@
 /* USER CODE BEGIN Includes */
 #include <stdbool.h>
 #include "arm_math.h"
+#include <stdlib.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -58,15 +59,15 @@ int8_t prismatic_right_sw = 0;
 int32_t prismatic_raw_encoder_val = 0;
 int32_t prismatic_raw_encoder_prev = 0;
 int32_t prismatic_encoder_val = 0;
-int32_t prismatic_position = 0;
-int32_t prismatic_error = 0;
-int32_t prismatic_feedback = 0;
+double prismatic_position = 0.00;
+double prismatic_error = 0.00;
+double prismatic_feedback = 0.00;
 
 int32_t state = 0;
 
 // PID
 arm_pid_instance_f32 PID = { 0 };
-int32_t prismatic_setposition = 0;
+double prismatic_setposition = 0.00;
 double prismatic_Kp = 1;
 double prismatic_Ki = 0;
 double prismatic_Kd = 0;
@@ -606,8 +607,8 @@ static void MX_DMA_Init(void)
 static void MX_GPIO_Init(void)
 {
   GPIO_InitTypeDef GPIO_InitStruct = {0};
-/* USER CODE BEGIN MX_GPIO_Init_1 */
-/* USER CODE END MX_GPIO_Init_1 */
+  /* USER CODE BEGIN MX_GPIO_Init_1 */
+  /* USER CODE END MX_GPIO_Init_1 */
 
   /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOC_CLK_ENABLE();
@@ -665,8 +666,8 @@ static void MX_GPIO_Init(void)
   HAL_NVIC_SetPriority(EXTI15_10_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
 
-/* USER CODE BEGIN MX_GPIO_Init_2 */
-/* USER CODE END MX_GPIO_Init_2 */
+  /* USER CODE BEGIN MX_GPIO_Init_2 */
+  /* USER CODE END MX_GPIO_Init_2 */
 }
 
 /* USER CODE BEGIN 4 */
@@ -702,8 +703,8 @@ void PrismaticMotorControl(int speed, int dir) {
 }
 
 void PrismaticPIDControl(double set_point) {
-	double position = (prismatic_encoder_val * 16) / 8192;
-	int speed = arm_pid_f32(&PID, set_point - position);
+	double position = (prismatic_encoder_val * 16.00) / 8192.00;
+	double speed = arm_pid_f32(&PID, set_point - position);
 	prismatic_error = set_point - position;
 	prismatic_feedback = speed;
 	int dir = (speed > 0) ? 0 : 1;
@@ -738,7 +739,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 		}
 
 		prismatic_encoder_val += delta;
-		prismatic_position = (prismatic_encoder_val * 16) / 8192;
+		prismatic_position = (prismatic_encoder_val * 16.00) / 8192.00;
 		prismatic_raw_encoder_prev = prismatic_raw_encoder_val;
 		//------------------------------------------------------------------------
 	}
