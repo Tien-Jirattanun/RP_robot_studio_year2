@@ -810,7 +810,7 @@ void RevoluteCascadeControl(double setpoint) {
 uint64_t micros()
 {
 
-	return __ْ̕HAL_TIM_GET_COUNTER(&htim5)+_micros;
+	return __HAL_TIM_GET_COUNTER(&htim5)+_micros;
 }
 
 void Revolute_PosVel_Update()
