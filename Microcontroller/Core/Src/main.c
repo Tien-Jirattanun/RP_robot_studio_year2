@@ -134,7 +134,7 @@ void SetHomeRevolute();
 void RevoluteMotorControl(int speed, int dir);
 void PrismaticCascadeControl(double pos_setpoint);
 uint64_t micros();
-void QEIEncoderPosVel_Update();
+void Revolute_PosVel_Update();
 // External Interrupt
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin);
 
@@ -197,23 +197,25 @@ int main(void)
 	HAL_TIM_Encoder_Start(&htim3, TIM_CHANNEL_ALL);
 	revolute_raw_encoder_val = __HAL_TIM_GET_COUNTER(&htim3);
 
-	// Setup Timer 2 for sensor reading
+	// Setup Timer 2 for Main Process
 	HAL_TIM_Base_Start_IT(&htim2);
 
-	// Setup Timer 5 for Main Process
+	// Setup Timer 5 for Micros
 	HAL_TIM_Base_Start_IT(&htim5);
 
 	//PID
 	PID.Kp = prismatic_Kp;
 	PID.Ki = prismatic_Ki;
 	PID.Kd = prismatic_Kd;
-	pos_pid->Kp = revolute_position_Kp;
-	pos_pid->Ki = revolute_position_Ki;
-	pos_pid->Kd = revolute_position_Kd;
-	vel_pid->Kp = revolute_velocity_Kp;
-	vel_pid->Ki = revolute_velocity_Ki;
-	vel_pid->Kd = revolute_velocity_Kd;
+	PID_position.Kp = revolute_position_Kp;
+	PID_position.Ki = revolute_position_Ki;
+	PID_position.Kd = revolute_position_Kd;
+	PID_velocity.Kp = revolute_velocity_Kp;
+	PID_velocity.Ki = revolute_velocity_Ki;
+	PID_velocity.Kd = revolute_velocity_Kd;
 	arm_pid_init_f32(&PID, 0);
+	arm_pid_init_f32(&PID_position, 0);
+	arm_pid_init_f32(&PID_velocity, 0);
 
 	SetHomePrismatic();
 	SetHomeRevolute();
@@ -225,7 +227,6 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-//		PrismaticPIDControl(prismatic_setposition);
 	}
   /* USER CODE END 3 */
 }
@@ -774,15 +775,8 @@ void PrismaticPIDControl(double set_point) {
 
 // Set Revolute to home
 void SetHomeRevolute() {
-	//reset encoder val
-	HAL_TIM_Encoder_Stop(&htim3, TIM_CHANNEL_ALL);
-	__HAL_TIM_SET_COUNTER(&htim3, 0);
-	revolute_raw_encoder_val = 0;
-	revolute_raw_encoder_prev = 0;
-	revolute_encoder_val = 0;
-	HAL_TIM_Encoder_Start(&htim3, TIM_CHANNEL_ALL);
-}
 
+}
 
 void RevoluteMotorControl(int speed, int dir) {
 	// Saturation
@@ -799,37 +793,31 @@ void RevoluteMotorControl(int speed, int dir) {
 }
 
 void RevoluteCascadeControl(double setpoint) {
-    // อ่านตำแหน่งจาก encoder
     double position = revolute_position;
     double pos_error = setpoint - position;
 
-    // Outer loop: ตำแหน่ง → ความเร็วเป้าหมาย
     double target_speed = arm_pid_f32(&PID_position, pos_error);
 
-    // อ่านความเร็วจริง (อาจใช้ encoder หรือ differentiator)
     double current_speed = revolute_velocity;
     double speed_error = target_speed - current_speed;
 
-    // Inner loop: ควบคุมความเร็วจริง → PWM
     double speed = arm_pid_f32(&PID_velocity, speed_error);
 
-    // ตัดค่า PWM ให้อยู่ในช่วง
-    int dir = (speed > 0) ? 0 : 1; // ทิศทาง (0: forward, 1: reverse)
+    int dir = (speed > 0) ? 0 : 1;
     PrismaticMotorControl(abs(speed), dir);
-
 }
 
 uint64_t micros()
 {
 
-	return ْ̕HAL_TIM_GET_COUNTER(&htim5)+_micros;
+	return __ْ̕HAL_TIM_GET_COUNTER(&htim5)+_micros;
 }
 
-void QEIEncoderPosVel_Update()
+void Revolute_PosVel_Update()
 {
 	QEIdata.TimeStamp[NEW] = micros();
-	QEIdata.Position[NEW] = ْ̕HAL_TIM_GET_COUNTER(&htim3);
-
+	QEIdata.Position[NEW] = __HAL_TIM_GET_COUNTER(&htim3);
+	revolute_position = (QEIdata.Position[NEW] * 0.5) / 8191;
 	QEIdata.QEIPostion_1turn = QEIdata.Position[NEW] % 8191;
 
 	int32_t diffPosition = QEIdata.Position[NEW] - QEIdata.Position[OLD];
@@ -868,18 +856,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 		//------------------------------------------------------------------------
 
 		//-------------------------Read QEI Revolute------------------------------
-		revolute_raw_encoder_val = __HAL_TIM_GET_COUNTER(&htim3);
-		int16_t delta2 = revolute_raw_encoder_val - revolute_raw_encoder_prev;
-
-		if (delta2 > 65535 / 2) {
-			delta2 -= 65535;
-		} else if (delta2 < -65535 / 2) {
-			delta2 += 65535;
-		}
-
-		revolute_encoder_val += delta2;
-		revolute_position = (revolute_encoder_val * 0.5) / 8192.00;
-		revolute_raw_encoder_prev = revolute_raw_encoder_val;
+		void QEIEncoderPosVel_Update();
 		//------------------------------------------------------------------------
 
 	    PrismaticPIDControl(prismatic_setposition);
