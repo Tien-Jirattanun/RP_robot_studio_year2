@@ -69,8 +69,8 @@ int32_t state = 0;
 // PID
 arm_pid_instance_f32 PID = { 0 };
 double prismatic_setposition = 0.00;
-double prismatic_Kp = 1;
-double prismatic_Ki = 0;
+double prismatic_Kp = 5;
+double prismatic_Ki = 2;
 double prismatic_Kd = 0;
 
 //Revolute
@@ -81,23 +81,34 @@ int32_t revolute_encoder_val = 0;
 double revolute_position = 0.00;
 double revolute_error = 0.00;
 double revolute_feedback = 0.00;
-
+double revolute_velocity = 0.00;
 // PID
-//Position COntrol
 arm_pid_instance_f32 PID_position = { 0 };
 double revolute_setposition = 0.00;
 double revolute_position_Kp = 1;
 double revolute_position_Ki = 0;
 double revolute_position_Kd = 0;
-//Velocity Control
+
 arm_pid_instance_f32 PID_velocity = { 0 };
-double revolute_velocity = 0.00;
 double revolute_velocity_Kp = 1;
 double revolute_velocity_Ki = 0;
 double revolute_velocity_Kd = 0;
 
-double prev_position = 0;
-uint32_t last_time = 0;
+typedef struct
+{
+	uint32_t Position[2];
+	uint64_t TimeStamp[2];
+	float QEIPostion_1turn;
+	float QEIAngularVelocity;
+}QEI_StructureTypeDef;
+
+QEI_StructureTypeDef QEIdata = {0};
+uint64_t _micros = 0;
+
+enum
+{
+	NEW,OLD
+};
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -119,9 +130,11 @@ int map(int x, int in_min, int in_max, int out_min, int out_max);
 
 
 //Revolute Control
+void SetHomeRevolute();
 void RevoluteMotorControl(int speed, int dir);
 void PrismaticCascadeControl(double pos_setpoint);
-double revolute_speed();
+uint64_t micros();
+void QEIEncoderPosVel_Update();
 // External Interrupt
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin);
 
@@ -194,10 +207,16 @@ int main(void)
 	PID.Kp = prismatic_Kp;
 	PID.Ki = prismatic_Ki;
 	PID.Kd = prismatic_Kd;
+	pos_pid->Kp = revolute_position_Kp;
+	pos_pid->Ki = revolute_position_Ki;
+	pos_pid->Kd = revolute_position_Kd;
+	vel_pid->Kp = revolute_velocity_Kp;
+	vel_pid->Ki = revolute_velocity_Ki;
+	vel_pid->Kd = revolute_velocity_Kd;
 	arm_pid_init_f32(&PID, 0);
 
 	SetHomePrismatic();
-
+	SetHomeRevolute();
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -586,9 +605,9 @@ static void MX_TIM5_Init(void)
 
   /* USER CODE END TIM5_Init 1 */
   htim5.Instance = TIM5;
-  htim5.Init.Prescaler = 1699;
+  htim5.Init.Prescaler = 169;
   htim5.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim5.Init.Period = 999;
+  htim5.Init.Period = 4294967295;
   htim5.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim5.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim5) != HAL_OK)
@@ -753,6 +772,17 @@ void PrismaticPIDControl(double set_point) {
 	PrismaticMotorControl(abs(speed), dir);
 }
 
+// Set Revolute to home
+void SetHomeRevolute() {
+	//reset encoder val
+	HAL_TIM_Encoder_Stop(&htim3, TIM_CHANNEL_ALL);
+	__HAL_TIM_SET_COUNTER(&htim3, 0);
+	revolute_raw_encoder_val = 0;
+	revolute_raw_encoder_prev = 0;
+	revolute_encoder_val = 0;
+	HAL_TIM_Encoder_Start(&htim3, TIM_CHANNEL_ALL);
+}
+
 
 void RevoluteMotorControl(int speed, int dir) {
 	// Saturation
@@ -768,22 +798,20 @@ void RevoluteMotorControl(int speed, int dir) {
 	__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, map(speed, 0, 100, 0, 19999));
 }
 
-PIDController pos_pid, vel_pid;
-
-void PrismaticCascadeControl(double pos_setpoint) {
+void RevoluteCascadeControl(double setpoint) {
     // อ่านตำแหน่งจาก encoder
-    double position = (revolute_encoder_val * 16.00) / 8192.00;
-    double pos_error = pos_setpoint - position;
+    double position = revolute_position;
+    double pos_error = setpoint - position;
 
     // Outer loop: ตำแหน่ง → ความเร็วเป้าหมาย
-    double target_speed = PID_Compute(&pos_pid, pos_setpoint, position, dt_outer);
+    double target_speed = arm_pid_f32(&PID_position, pos_error);
 
     // อ่านความเร็วจริง (อาจใช้ encoder หรือ differentiator)
-    double current_speed = revolute_speed(); // คุณต้องเขียนฟังก์ชันนี้
+    double current_speed = revolute_velocity;
     double speed_error = target_speed - current_speed;
 
     // Inner loop: ควบคุมความเร็วจริง → PWM
-    double pwm_output = PID_Compute(&vel_pid, target_speed, current_speed, dt_inner);
+    double speed = arm_pid_f32(&PID_velocity, speed_error);
 
     // ตัดค่า PWM ให้อยู่ในช่วง
     int dir = (speed > 0) ? 0 : 1; // ทิศทาง (0: forward, 1: reverse)
@@ -791,26 +819,40 @@ void PrismaticCascadeControl(double pos_setpoint) {
 
 }
 
-double revolute_speed() {
-    double position = revolute_position;  // แปลงเป็น mm หรือหน่วยจริง
-    uint32_t now = HAL_GetTick();
-    double dt = (now - last_time) / 1000.0;
+uint64_t micros()
+{
 
-    if (dt <= 0) dt = 0.001;
-
-    double speed = (position - prev_position) / dt;
-
-    prev_position = position;
-    last_time = now;
-
-    return speed;
+	return ْ̕HAL_TIM_GET_COUNTER(&htim5)+_micros;
 }
 
+void QEIEncoderPosVel_Update()
+{
+	QEIdata.TimeStamp[NEW] = micros();
+	QEIdata.Position[NEW] = ْ̕HAL_TIM_GET_COUNTER(&htim3);
+
+	QEIdata.QEIPostion_1turn = QEIdata.Position[NEW] % 8191;
+
+	int32_t diffPosition = QEIdata.Position[NEW] - QEIdata.Position[OLD];
+
+	if (diffPosition > (64512 / 2))
+		diffPosition -= 64512;
+	else if (diffPosition < -(64512 / 2))
+		diffPosition += 64512;
+
+	float diffTime = (QEIdata.TimeStamp[NEW]-QEIdata.TimeStamp[OLD]) * 0.000001;
+	if(diffTime == 0)
+	return;
+
+	QEIdata.QEIAngularVelocity = (float)diffPosition / diffTime;
+	revolute_velocity = QEIdata.QEIAngularVelocity;
+	QEIdata.Position[OLD] = QEIdata.Position[NEW];
+	QEIdata.TimeStamp[OLD]=QEIdata.TimeStamp[NEW];
+}
 // Timer loop (Read sensor data and calculate here)
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 	if (htim == &htim2) {
 
-		//-------------------------Read QEI Prismatic-------------------------
+		//-------------------------Read QEI Prismatic-----------------------------
 		prismatic_raw_encoder_val = __HAL_TIM_GET_COUNTER(&htim4);
 		int16_t delta1 = prismatic_raw_encoder_val - prismatic_raw_encoder_prev;
 
@@ -825,7 +867,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 		prismatic_raw_encoder_prev = prismatic_raw_encoder_val;
 		//------------------------------------------------------------------------
 
-		//-------------------------Read QEI Revolute-------------------------
+		//-------------------------Read QEI Revolute------------------------------
 		revolute_raw_encoder_val = __HAL_TIM_GET_COUNTER(&htim3);
 		int16_t delta2 = revolute_raw_encoder_val - revolute_raw_encoder_prev;
 
@@ -839,25 +881,16 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 		revolute_position = (revolute_encoder_val * 0.5) / 8192.00;
 		revolute_raw_encoder_prev = revolute_raw_encoder_val;
 		//------------------------------------------------------------------------
-	}
 
-	double dt_outer, dt_inner;
-	uint32_t last_time_outer = 0, last_time_inner = 0;
-
-	// ใน callback ของ Timer (เช่นใน HAL_TIM_PeriodElapsedCallback)
-	if (htim == &htim5) {
-	    uint32_t now_outer = HAL_GetTick();
-	    dt_outer = (now_outer - last_time_outer) / 1000.0; // dt ในหน่วยวินาที
-	    last_time_outer = now_outer;
-
-	    uint32_t now_inner = HAL_GetTick();
-	    dt_inner = (now_inner - last_time_inner) / 1000.0; // dt ในหน่วยวินาที
-	    last_time_inner = now_inner;
-
-	    // เรียกใช้ Cascade Control โดยส่งค่า dt
 	    PrismaticPIDControl(prismatic_setposition);
 	    PrismaticCascadeControl(revolute_setposition);
 	}
+
+	if(htim == &htim5)
+	{
+		_micros += UINT32_MAX;
+	}
+
 }
 
 /* USER CODE END 4 */
